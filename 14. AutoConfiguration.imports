@@ -1,0 +1,151 @@
+# 🚀 Spring Boot 3.x의 새로운 자동 구성 메타 시스템: `AutoConfiguration.imports`
+
+> “더 이상 `spring.factories`에 의존하지 않는다.
+> AOT 최적화와 명시적 자동 구성을 위한 새로운 방식, `AutoConfiguration.imports`를 이해하자.”
+
+---
+
+## ✅ 배경: 왜 새로운 메타 시스템이 필요한가?
+
+### 📌 기존 방식: `spring.factories`
+
+```properties
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+com.example.MyAutoConfiguration
+```
+
+* Spring Boot 2.x까지는 `META-INF/spring.factories` 파일에 자동 구성 클래스를 등록
+* 그러나 문제점:
+
+  * 단일 key에 모든 구성 클래스 → **분석과 디버깅 어려움**
+  * Native Image(AOT) 컴파일 시 분석이 어려움
+  * 구성이 너무 묵시적이며 다이나믹
+
+### ✅ 새로운 방식의 필요성
+
+Spring Boot 3.0부터는 GraalVM Native Image, AOT 분석 최적화를 위해
+더 **정적이고 명시적이며 분할 가능한 구조**가 필요했고,
+그 결과로 `AutoConfiguration.imports` 메타 시스템이 도입되었습니다.
+
+---
+
+## ✅ 1. 기본 개념
+
+### 📄 파일 위치 및 이름
+
+```text
+META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+```
+
+### 📄 내용 예시 (클래스 이름만 작성)
+
+```text
+com.example.MyAutoConfiguration
+com.example.DataSourceAutoConfiguration
+```
+
+➡ 각 항목은 `@AutoConfiguration` 혹은 `@Configuration`이 붙은 클래스여야 함.
+
+---
+
+## ✅ 2. 동작 흐름
+
+### ✅ @EnableAutoConfiguration → AutoConfigurationImportSelector
+
+```java
+@EnableAutoConfiguration
+    ↓
+AutoConfigurationImportSelector
+    ↓
+AutoConfigurationEntries.from(...)
+    ↓
+AutoConfiguration.imports 파일을 로딩
+    ↓
+클래스 이름 목록을 읽고 → @Configuration으로 등록
+```
+
+➡ Spring Boot는 `AutoConfiguration.imports` 파일들을 모두 로딩하여
+자동 설정 클래스 목록을 구성하고, 조건부로 컨텍스트에 포함시킵니다.
+
+---
+
+## ✅ 3. 기존 `spring.factories`와의 차이점
+
+| 항목      | `spring.factories`                        | `AutoConfiguration.imports`                                                        |
+| ------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| 위치      | `META-INF/spring.factories`               | `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` |
+| 형식      | Key-Value (`EnableAutoConfiguration=...`) | Value-only (FQCN 목록만 나열)                                                           |
+| AOT 최적화 | ❌ 어렵다                                     | ✅ 정적 분석에 최적화                                                                       |
+| 병합 방식   | 모든 JAR에서 하나의 key 아래 리스트 결합                | 각 JAR마다 분할된 imports 파일 병합                                                          |
+| 도구 지원   | 일부 플러그인, 수동 관리                            | Gradle/Spring Boot Plugin 지원 예정                                                    |
+
+---
+
+## ✅ 4. 자동 설정 클래스 작성 방식
+
+### ✅ 1단계: 설정 클래스 만들기
+
+```java
+@AutoConfiguration
+public class MyAutoConfiguration {
+
+    @Bean
+    public MyService myService() {
+        return new MyService();
+    }
+}
+```
+
+> `@AutoConfiguration`은 내부적으로 `@Configuration(proxyBeanMethods = false)`을 포함
+
+### ✅ 2단계: `.imports` 파일에 등록
+
+```text
+# META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+com.example.MyAutoConfiguration
+```
+
+> 이 파일이 존재하지 않으면, `@AutoConfiguration` 클래스는 아무리 있어도 자동 등록되지 않음.
+
+---
+
+## ✅ 5. spring.factories 와 병행 사용 가능?
+
+예. Spring Boot 3.x는 여전히 `spring.factories`도 지원합니다.
+단, **새로운 방식이 우선 적용되며, `spring.factories`는 점차 deprecated 방향으로 전환**됩니다.
+
+---
+
+## ✅ 6. 실전 예시: 모듈형 AutoConfiguration
+
+```
+my-starter-module/
+├── src/main/java/com/example/MyAutoConfiguration.java
+├── src/main/resources/
+│   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+│       → com.example.MyAutoConfiguration
+```
+
+➡ 이렇게 모듈화된 구성 클래스는 외부 프로젝트에 추가만 하면 자동으로 활성화됩니다.
+
+---
+
+## ✅ 7. AOT 최적화를 위한 이유
+
+* GraalVM Native Image는 리플렉션 기반 로딩을 제한함
+* `.imports` 파일은 **정적으로 클래스 이름이 명시되므로** AOT 분석이 가능
+* Spring Boot의 `native-image.properties` 또는 `spring-aot.json` 등과 잘 통합됨
+
+---
+
+## ✅ 마무리 요약
+
+| 항목              | 설명                                                                                 |
+| --------------- | ---------------------------------------------------------------------------------- |
+| 도입 시기           | Spring Boot 3.0부터                                                                  |
+| 기존 방식과 병행 가능 여부 | 가능 (`spring.factories` + `.imports`)                                               |
+| 주요 목적           | AOT, Native Image, 성능 최적화, 명시성                                                     |
+| 등록 대상           | `@AutoConfiguration` 클래스                                                           |
+| 등록 파일           | `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` |
+| 지원 도구           | Spring Boot Gradle Plugin 등 (예정)                                                   |
+
