@@ -1,0 +1,175 @@
+# 📦 `@Import` vs `@ImportResource` — Spring 구성 확장의 두 축 완전 해부
+
+> “Spring 구성을 확장하는 방법은 여러 가지다.
+> 자바 기반 구성을 선호하든 XML을 재사용하든, 내부는 모두 정교하게 설계되어 있다.”
+
+---
+
+## ✅ 개요
+
+Spring에서는 여러 개의 구성 파일 혹은 구성 클래스를 하나의 애플리케이션 컨텍스트에 병합할 수 있도록 다양한 **구성 확장 메커니즘**을 제공합니다.
+
+그중 대표적인 확장 수단이 다음 두 가지입니다:
+
+| 어노테이션             | 역할 요약                                      |
+| ----------------- | ------------------------------------------ |
+| `@Import`         | 자바 기반 구성 클래스, ImportSelector, Registrar 등록 |
+| `@ImportResource` | XML 구성 파일을 명시적으로 등록                        |
+
+---
+
+## 🔍 1. @Import
+
+### 📌 기본 개념
+
+```java
+@Configuration
+@Import({AppConfigA.class, AppConfigB.class})
+public class MainConfig {
+}
+```
+
+* `@Import`는 **자바 기반의 @Configuration 클래스** 또는 특정 타입(ImportSelector 등)을 **현재 컨텍스트에 포함시킴**
+* 클래스 단위의 메타데이터 분석이므로, 타입 안전하며 리팩토링 친화적
+
+---
+
+### 지원 대상 타입
+
+| 등록 타입                           | 설명                                     |
+| ------------------------------- | -------------------------------------- |
+| `@Configuration` 클래스            | 단순한 구성 클래스 병합                          |
+| `ImportSelector` 구현체            | 문자열 기반으로 동적으로 다른 구성 클래스 이름 반환          |
+| `DeferredImportSelector`        | Spring의 구성이 끝난 후 지연 등록 (자동 설정에 자주 사용됨) |
+| `ImportBeanDefinitionRegistrar` | BeanDefinition을 프로그래밍적으로 직접 등록         |
+
+---
+
+### 내부 처리 메커니즘
+
+#### 핵심 클래스: `ConfigurationClassParser`
+
+```java
+private void processImports(ConfigurationClass configClass, ... , Collection<SourceClass> importCandidates)
+```
+
+1. `@Import` 메타데이터 분석 → 등록 대상 class들 추출
+2. 각각의 타입에 따라 분기 처리:
+
+   * `@Configuration`: 재귀 파싱
+   * `ImportSelector`: `selectImports()` 호출하여 import 대상 추출
+   * `ImportBeanDefinitionRegistrar`: `registerBeanDefinitions()` 호출
+3. 결과적으로 **BeanDefinition으로 변환되어 컨테이너에 등록됨**
+
+---
+
+### 실전 예시
+
+```java
+@Configuration
+public class WebConfig {
+    @Bean
+    public MyService myService() {
+        return new MyService();
+    }
+}
+
+@Configuration
+@Import(WebConfig.class)
+public class AppConfig {
+}
+```
+
+➡ `AppConfig`가 등록될 때, Spring은 `WebConfig`도 동일하게 `@Configuration`으로 분석하여 `MyService`도 등록됨
+
+---
+
+## 🔍 2. @ImportResource
+
+### 📌 기본 개념
+
+```java
+@Configuration
+@ImportResource("classpath:/spring/app-config.xml")
+public class XmlImportingConfig {
+}
+```
+
+* XML 파일 기반 구성을 명시적으로 가져와 **자바 구성성과 병합**
+* `ApplicationContext` 초기화 시, 지정된 XML 리소스를 **BeanDefinition으로 파싱**
+
+---
+
+### 내부 처리 메커니즘
+
+#### 핵심 클래스: `ConfigurationClassPostProcessor`
+
+```java
+private void loadBeanDefinitionsFromImportedResources()
+```
+
+1. `@ImportResource` 애너테이션의 구성으로부터 XML 경로 추출
+2. `BeanDefinitionReader` 선택:
+
+   * `.xml` → `XmlBeanDefinitionReader`
+   * `.groovy` → `GroovyBeanDefinitionReader` (거의 사용되지 않음)
+3. `BeanDefinitionReader.loadBeanDefinitions()` 호출
+
+---
+
+### 실전 예시
+
+```xml
+<!-- classpath:/spring/legacy.xml -->
+<beans>
+    <bean id="legacyService" class="com.example.LegacyService"/>
+</beans>
+```
+
+```java
+@Configuration
+@ImportResource("classpath:/spring/legacy.xml")
+public class AppConfig {}
+```
+
+➡ 이 설정만으로 `LegacyService`가 Spring Bean으로 등록됨
+
+---
+
+## ✅ 기능 및 구조 비교
+
+| 항목       | `@Import`                                | `@ImportResource`                              |
+| -------- | ---------------------------------------- | ---------------------------------------------- |
+| 대상       | 자바 클래스, Selector, Registrar              | XML, Groovy 등의 구성 파일                           |
+| 동적 확장    | O (ImportSelector)                       | X (정적 XML만 가능)                                 |
+| 타입 안전성   | 높음 (Class 기반)                            | 낮음 (문자열 기반 경로)                                 |
+| 리팩토링 친화성 | 우수                                       | 낮음 (파일 경로 변경 시 에러 가능성)                         |
+| 활용 예시    | `@EnableAsync`, `@EnableJpaRepositories` | 레거시 XML 설정 병합                                  |
+| 내부 처리자   | `ConfigurationClassParser`               | `ConfigurationClassPostProcessor` 내부 Reader 사용 |
+
+---
+
+## ✅ 함께 쓰는 경우
+
+```java
+@Configuration
+@Import({WebConfig.class, SecurityConfig.class})
+@ImportResource({"classpath:/legacy-dao.xml"})
+public class AppConfig {}
+```
+
+→ Java + XML 설정을 병행하여 마이그레이션하거나 혼합 설정 가능
+
+---
+
+## 🧠 결론 요약
+
+| 질문                               | 요약 답변                               |
+| -------------------------------- | ----------------------------------- |
+| 자바 구성 클래스 병합하려면?                 | `@Import(AppConfig.class)` 사용       |
+| 레거시 XML 구성 가져오려면?                | `@ImportResource("...xml")` 사용      |
+| 외부 조건에 따라 구성 클래스를 동적으로 바꾸려면?     | `ImportSelector` 구현체를 `@Import`에 사용 |
+| BeanDefinition을 코드로 직접 등록하고 싶다면? | `ImportBeanDefinitionRegistrar` 사용  |
+| 자동 구성처럼 지연 적용이 필요하다면?            | `DeferredImportSelector` 사용         |
+
+
