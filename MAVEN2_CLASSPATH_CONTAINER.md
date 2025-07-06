@@ -1,5 +1,3 @@
-.classpath 파일에서 선언된 MAVEN2_CLASSPATH_CONTAINER
-
 ## 📦 핵심 개념: `MAVEN2_CLASSPATH_CONTAINER`
 
 ```xml
