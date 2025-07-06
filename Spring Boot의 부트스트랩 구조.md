@@ -1,0 +1,249 @@
+# 🧠 Spring Boot의 부트스트랩 구조 완전 분석: `@SpringBootApplication`과 `SpringApplication.run()`의 내부 메커니즘
+
+---
+
+## 1️⃣ `@SpringBootApplication`의 역할
+
+```java
+@SpringBootApplication
+public class MyApp {
+    public static void main(String[] args) {
+        SpringApplication.run(MyApp.class, args);
+    }
+}
+```
+
+### 🔍 `@SpringBootApplication` = 3가지 애너테이션 조합
+
+```java
+@Target(...)
+@Retention(...)
+@Documented
+@Inherited
+@SpringBootConfiguration
+@EnableAutoConfiguration
+@ComponentScan
+public @interface SpringBootApplication {
+    ...
+}
+```
+
+#### 설명:
+
+* `@SpringBootConfiguration`: `@Configuration`의 확장 — Bean 정의를 포함하는 구성 클래스임을 나타냄.
+* `@EnableAutoConfiguration`: `spring.factories`의 `EnableAutoConfiguration` 항목을 기반으로 자동 설정 수행.
+* `@ComponentScan`: 현재 패키지를 기준으로 모든 `@Component` 스캔하여 빈 등록.
+
+> 즉, 이 하나의 애너테이션이 **Spring 애플리케이션 구동에 필요한 최소한의 설정**을 모두 해주는 역할을 합니다.
+
+---
+
+## 2️⃣ `SpringApplication.run()` 동작 흐름 전체 요약
+
+```java
+SpringApplication.run(MyApp.class, args);
+```
+
+### 내부 동작 순서 개요:
+
+1. `SpringApplication` 객체 생성
+2. 초기화 작업 (`ApplicationContextInitializer`, `ApplicationListener`, `mainApplicationClass` 탐색 등)
+3. 환경(Environment) 생성 및 설정
+4. `ApplicationContext` 생성
+5. `ApplicationContextInitializer` 실행
+6. `ApplicationListener` 등록
+7. `@Bean`, `@Configuration`, `@Component` 스캔 및 등록
+8. `CommandLineRunner` / `ApplicationRunner` 실행
+
+---
+
+## 3️⃣ 소스코드 분석: `SpringApplication.run()`
+
+### 📍 진입점
+
+```java
+public static ConfigurableApplicationContext run(Class<?> primarySource, String... args) {
+    return new SpringApplication(primarySource).run(args);
+}
+```
+
+### 📍 SpringApplication 생성자
+
+```java
+public SpringApplication(Class<?>... primarySources) {
+    this();
+    setPrimarySources(Arrays.asList(primarySources));
+    this.webApplicationType = WebApplicationType.deduceFromClasspath();
+}
+```
+
+* `primarySources`: 보통 `@SpringBootApplication`이 붙은 클래스를 가리킴.
+* `WebApplicationType`: 서블릿 기반 (Tomcat), REACTIVE(Netty), NONE 등을 자동 감지.
+
+---
+
+### 📍 run(String... args)
+
+```java
+public ConfigurableApplicationContext run(String... args) {
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start();
+
+    // 1. 초기화 준비
+    DefaultBootstrapContext bootstrapContext = createBootstrapContext();
+    ConfigurableApplicationContext context = null;
+
+    // 2. ApplicationListeners 실행 (spring.factories 기반)
+    SpringApplicationRunListeners listeners = getRunListeners(args);
+    listeners.starting(bootstrapContext, this.mainApplicationClass);
+
+    try {
+        // 3. 환경(Environment) 생성 및 바인딩
+        ConfigurableEnvironment environment = prepareEnvironment(listeners, bootstrapContext, args);
+
+        // 4. 배너 출력
+        Banner printedBanner = printBanner(environment);
+
+        // 5. ApplicationContext 생성 (기본은 AnnotationConfigServletWebServerApplicationContext)
+        context = createApplicationContext();
+
+        // 6. ApplicationContextInitializer 실행
+        prepareContext(bootstrapContext, context, environment, listeners, applicationArguments, printedBanner);
+
+        // 7. 리프레시 (refresh() 호출)
+        refreshContext(context);
+
+        // 8. Runner들 실행
+        afterRefresh(context, applicationArguments);
+
+        listeners.running(context);
+        stopWatch.stop();
+
+        return context;
+    }
+    catch (Throwable ex) {
+        handleRunFailure(context, ex, listeners);
+        throw new IllegalStateException(ex);
+    }
+}
+```
+
+---
+
+## 4️⃣ 주요 메서드 내부 상세 분석
+
+---
+
+### 🔍 `prepareEnvironment()`
+
+```java
+ConfigurableEnvironment environment = new StandardServletEnvironment();
+configureEnvironment(environment, args);
+bindToSpringApplication(environment);
+```
+
+* `application.properties`, `application.yml`, 시스템 속성, 커맨드라인 인자를 읽어 Spring의 `Environment` 객체에 바인딩.
+* 이 단계에서 **프로파일 활성화**, `@Value("${...}")` 사용 가능.
+
+---
+
+### 🔍 `createApplicationContext()`
+
+```java
+private ConfigurableApplicationContext createApplicationContext() {
+    Class<?> contextClass = this.applicationContextClass;
+
+    if (contextClass == null) {
+        switch (this.webApplicationType) {
+            case SERVLET:
+                contextClass = AnnotationConfigServletWebServerApplicationContext.class;
+                break;
+            case REACTIVE:
+                contextClass = AnnotationConfigReactiveWebServerApplicationContext.class;
+                break;
+            default:
+                contextClass = AnnotationConfigApplicationContext.class;
+        }
+    }
+    return (ConfigurableApplicationContext) BeanUtils.instantiateClass(contextClass);
+}
+```
+
+> 서블릿 기반에서는 기본적으로 `AnnotationConfigServletWebServerApplicationContext`가 사용됩니다.
+
+---
+
+### 🔍 `refreshContext(context)`
+
+```java
+context.refresh();
+```
+
+> `refresh()`는 `ApplicationContext`의 핵심 생명주기 메서드로, **BeanFactory 초기화**, **빈 등록**, **빈 생성**, **@PostConstruct 호출**, **AOP 적용**, **Event 발행**, 등 핵심 초기화를 수행합니다.
+
+---
+
+### 🔍 `afterRefresh(context, args)`
+
+```java
+callRunners(context, applicationArguments);
+```
+
+> `CommandLineRunner`, `ApplicationRunner` 인터페이스를 구현한 클래스의 `run()` 메서드를 실행합니다.
+
+```java
+@Bean
+public CommandLineRunner init() {
+    return args -> System.out.println("앱 실행 후 초기 작업 실행");
+}
+```
+
+---
+
+## 5️⃣ spring.factories 기반의 확장성
+
+Spring Boot는 `META-INF/spring.factories` 파일을 통해 다음과 같은 확장을 로딩합니다:
+
+| 타입                              | 예시 구현체                                   |
+| ------------------------------- | ---------------------------------------- |
+| `ApplicationListener`           | `LoggingApplicationListener`             |
+| `ApplicationContextInitializer` | `ContextIdApplicationContextInitializer` |
+| `EnvironmentPostProcessor`      | `ConfigFileApplicationListener`          |
+| `FailureAnalyzer`               | `BeanNotOfRequiredTypeFailureAnalyzer`   |
+| `SpringApplicationRunListener`  | `EventPublishingRunListener`             |
+
+이들은 모두 SpringApplication의 **런타임 확장 지점**입니다.
+
+---
+
+## 🧩 전체 부트스트랩 구조 요약 다이어그램
+
+```
+@SpringBootApplication
+        ↓
+SpringApplication.run()
+        ↓
+[SpringApplication 생성자]
+        ↓
+[run() 실행]
+    → 환경 구성
+    → 리스너 실행
+    → ApplicationContext 생성
+    → AutoConfiguration 수행
+    → 빈 등록 및 초기화 (refresh())
+    → CommandLineRunner 실행
+```
+
+---
+
+## ✅ 마무리: 핵심 요약
+
+| 항목                           | 설명                        |
+| ---------------------------- | ------------------------- |
+| `@SpringBootApplication`     | 설정 클래스, 자동 구성, 컴포넌트 스캔    |
+| `SpringApplication.run()`    | SpringContext를 부트스트랩하고 실행 |
+| `createApplicationContext()` | 웹 타입에 따라 다른 Context 생성    |
+| `refresh()`                  | 빈 팩토리 초기화, AOP, 이벤트 발행 등  |
+| `CommandLineRunner`          | 앱 실행 후 로직 삽입 지점           |
+| `spring.factories`           | Spring Boot 확장 지점 로딩      |
+
