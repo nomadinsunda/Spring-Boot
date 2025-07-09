@@ -223,10 +223,17 @@ spring:
     username: root
     password: your_password
     driver-class-name: com.mysql.cj.jdbc.Driver
+
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     show-sql: true
+    defer-datasource-initialization: true
+
+  sql:
+    init:
+      mode: always
+
 ```
 ## schema.sql
 ```sql
