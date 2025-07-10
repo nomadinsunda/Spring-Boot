@@ -99,4 +99,107 @@ Blacklist의 부담을 줄이기 위해 다음과 같은 전략을 함께 사용
 | 한계 | Stateless 설계에 반함, 성능 이슈 있음              |
 | 대안 | 토큰 만료 시간 짧게 + Refresh Token Rotation 사용 |
 
+---
+
+## ✅ Spring Boot 3 + Redis 기반의 **JWT 블랙리스트** 구현 예제
+
+---
+
+## ✅ 1. Redis 설정
+
+```yaml
+# application.yml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+```
+
+---
+
+## ✅ 2. Blacklist 저장 서비스
+
+```java
+@Service
+public class TokenBlacklistService {
+
+    private final RedisTemplate<String, String> redisTemplate;
+
+    public TokenBlacklistService(RedisTemplate<String, String> redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public void blacklistToken(String token, long expirationMillis) {
+        redisTemplate.opsForValue().set(token, "blacklisted", expirationMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public boolean isBlacklisted(String token) {
+        return redisTemplate.hasKey(token);
+    }
+}
+```
+
+---
+
+## ✅ 3. 로그아웃 기능 추가
+
+```java
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api")
+public class AuthController {
+
+    private final TokenBlacklistService tokenBlacklistService;
+    private final TokenProvider tokenProvider;
+
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(HttpServletRequest request) {
+        String bearer = request.getHeader("Authorization");
+
+        if (bearer != null && bearer.startsWith("Bearer ")) {
+            String token = bearer.substring(7);
+
+            if (tokenProvider.validateToken(token)) {
+                long expiration = tokenProvider.getExpiration(token);
+                tokenBlacklistService.blacklistToken(token, expiration);
+                return ResponseEntity.ok().build();
+            }
+        }
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+    }
+}
+```
+
+---
+
+## ✅ 4. JwtAuthenticationFilter에서 블랙리스트 검사
+
+```java
+if (StringUtils.hasText(jwt) 
+    && tokenProvider.validateToken(jwt)
+    && !tokenBlacklistService.isBlacklisted(jwt)) {
+
+    Authentication authentication = tokenProvider.getAuthentication(jwt);
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+}
+```
+
+---
+
+## ✅ 5. TokenProvider에 `getExpiration()` 메서드 추가
+
+```java
+public long getExpiration(String token) {
+    Date expiration = Jwts.parserBuilder()
+        .setSigningKey(key)
+        .build()
+        .parseClaimsJws(token)
+        .getBody()
+        .getExpiration();
+
+    return expiration.getTime() - System.currentTimeMillis();
+}
+```
+
 
